@@ -1,10 +1,17 @@
 # vim: tabstop=4:softtabstop=4:shiftwidth=4:expandtab:
 
-from collections import namedtuple
 from math import sin, cos, asin, sqrt, radians
-from requests import get
+try:
+    from urequests import get
+except ImportError:
+    from requests import get
 
-Coord = namedtuple('Coord', 'latitude longitude')
+
+def mk_queryparams(params):
+    query = []
+    for k,v in params.items():
+        query.append('{}={}'.format(k,v))
+    return '?'+'&'.join(query)
 
 class GeoPressure(object):
     #This class does uses some web services to estimate your local sea level
@@ -16,24 +23,24 @@ class GeoPressure(object):
     #Just as aircraft need to adjust their altimeters to local pressure, users
     #of pressure sensors (eg. BME280 or BMP085) use this to calculate altitude.
     def __init__(self):
-        self._url = 'https://aviationweather.gov/adds/dataserver_current/httpparam'
-        self.location = Coord(None, None)
+        self._url = 'http://aviationweather.gov/adds/dataserver_current/httpparam'
+        self.location = {'lat':None, 'lon':None}
         self.airport = None
         self.metar = None
 
     def haversine(self, p1, p2):
-        # Great circle distance, used to find nearest airport. p1 and p2 are
-        # Coords; a 2-element namedtuple containing latitude and longitude
+        # Great circle distance, used to find nearest airport. p1 and p2
+        # are 2-element dicts containing 'lat' and 'lon'
         # Based on https://rosettacode.org/wiki/Haversine_formula#Python
-        p1 = Coord(float(p1.latitude), float(p1.longitude))
-        p2 = Coord(float(p2.latitude), float(p2.longitude))
+        p1 = {'lat': float(p1['lat']), 'lon': float(p1['lon'])}
+        p2 = {'lat': float(p2['lat']), 'lon': float(p2['lon'])}
 
         earth_radius = 3959.87433  #  miles
         # earth_radius = 6372.8  #  kilometers
-        d_lat = radians(p2.latitude - p1.latitude)
-        d_lon = radians(p2.longitude - p1.longitude)
+        d_lat = radians(p2['lat'] - p1['lat'])
+        d_lon = radians(p2['lon'] - p1['lon'])
 
-        arclen = sin(d_lat / 2)**2 + cos(p1.latitude) * cos(p2.latitude) * sin(d_lon / 2)**2
+        arclen = sin(d_lat / 2)**2 + cos(p1['lat']) * cos(p2['lat']) * sin(d_lon / 2)**2
         chord = 2 * asin(sqrt(arclen))
 
         return earth_radius * chord
@@ -68,7 +75,7 @@ class GeoPressure(object):
         #    u'zip': u'94110'}
         result = get('http://ip-api.com/json/{}'.format(target_ip)).json()
         
-        self.location = Coord(latitude=float(result['lat']), longitude=float(result['lon']))
+        self.location = {'lat': float(result['lat']), 'lon': float(result['lon'])}
         return self.location
 
     def get_stations(self, near, distance=10):
@@ -84,15 +91,13 @@ class GeoPressure(object):
         #   'state': 'CA',
         #   'station_id': 'KSFO',
         #   'wmo_id': '72494'}
-        if not isinstance(near, Coord):
-            raise ValueError('"near" must be a Coord()')
 
         params = {'dataSource': 'stations',
                   'requestType': 'retrieve',
                   'format': 'csv',
-                  'radialDistance': '{};{},{}'.format(distance, near.longitude, near.latitude)}
-        resp = get(self._url, params=params)
-        if not resp.ok:
+                  'radialDistance': '{};{},{}'.format(distance, near['lon'], near['lat'])}
+        resp = get(self._url+mk_queryparams(params))
+        if resp.status_code != 200:
             return None
 
         rows = str(resp.text).strip().split('\n')[5:]
@@ -101,7 +106,7 @@ class GeoPressure(object):
         for row in rows[1:]:
             data = map(lambda x: x.strip(), row.split(','))
             station = dict(zip(fields, data))
-            station['distance'] = self.haversine(near, Coord(station['latitude'], station['longitude']))
+            station['distance'] = self.haversine(near, {'lat': station['latitude'], 'lon':station['longitude']})
 
             station['site_type'] = station.get('site_type', '').split()
             if 'METAR' in station['site_type']:  # only use this airport if it has METARS.
@@ -109,7 +114,7 @@ class GeoPressure(object):
         ret_val.sort(key=lambda x: x['distance'])
         return ret_val
 
-    def get_metar(self, icao='KSFO', hours=6):
+    def get_metar(self, icao='KSFO', hours=2):
         # Get the METAR for a specific airport
         # https://www.aviationweather.gov/dataserver
         #   {'altim_in_hg': '29.870079',
@@ -156,8 +161,8 @@ class GeoPressure(object):
                   'format': 'csv',
                   'stationString': icao,
                   'hoursBeforeNow': hours}
-        resp = get(self._url, params=params)
-        if not resp.ok:
+        resp = get(self._url+mk_queryparams(params))
+        if resp.status_code != 200:
             return None
 
         rows = str(resp.text).strip().split('\n')
@@ -176,7 +181,7 @@ class GeoPressure(object):
     def get_slp(self, target_ip='', near=None, airport=None, distance=10):
         # All-in-one sea level pressure calculation
         if airport is None:
-            if near is not None and isinstance(near, Coord):
+            if near is not None and isinstance(near, dict):
                 self.location = near
             else:
                 geo = self.get_geoip(target_ip)
@@ -204,4 +209,4 @@ class GeoPressure(object):
 
 if __name__ == '__main__':
     geopressure = GeoPressure()
-    print geopressure()
+    print(geopressure())
